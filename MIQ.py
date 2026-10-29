@@ -2,7 +2,7 @@
 """
 MIQ_main_v2.py
 ==============
-MIQ-Net : Maximal-Invariant Quotient Network 
+MIQ-Net : Maximal-Invariant Quotient Network
 Brain-tumour MRI classification (glioma | meningioma | notumor | pituitary)
 Light backbones: EdgeNeXt-XXS (1.3M), FastViT-T8 (3.6M), MobileNetV3-Large (4.2M)
 
@@ -29,22 +29,24 @@ POSITIONING (what is NOT new):  log-domain bias removal (homomorphic filtering,
 N4), gain/contrast normalisation, spectral-norm Lipschitz heads and consistency
 regularisation are all known.  The study's contribution is the COMBINATION with a
 provable maximal-invariant quotient, the leakage diagnostics, and a protocol with
-controls that separate "quotient" from "augmentation", "consistency loss",
-"classical homomorphic filtering" and "plain log+normalise (K=1)".
+controls that separate "quotient" from "augmentation", "consistency loss" and
+"classical homomorphic filtering".
 
 LIMITS (stated honestly): additive/Rician noise and out-of-span bias are not
 removed exactly; the sweeps expose this.  Public brain-MRI test accuracy is near
 ceiling, so the headline evidence is robustness / shift / calibration / cost, with
-significance tests, NOT the last 0.2% of clean accuracy.
+significance tests, NOT the last 0.2% of clean accuracy.  No component ablation is
+run in this script, so no claim is made about which individual component of MIQ
+is responsible for any gain.
 
 -------------------------------------------------------------------------------
-MODELS
+MODELS  (5 kinds x 3 backbones = 15 models)
 -------------------------------------------------------------------------------
- BASE_b  raw ERM | AUG_b raw + nuisance aug | HOMO_b homomorphic filter + ERM
+ BASE_b  raw ERM
+ AUG_b   raw + nuisance augmentation
+ HOMO_b  homomorphic filter + ERM
  CONS_b  raw + orbit-consistency loss (CONTROL: same recipe as MIQ, no quotient)
  MIQ_b   quotient + orbit-consistency + Lipschitz head (proposed)
- MIQ_b_{abl}: no_inq, no_gamma, no_mask, dct_basis, rand_basis, k1, k6, k24,
-              no_cons, no_lip
 
 PROTOCOL HARDENING (v2)
  * validation split is GROUP-aware (near-duplicate clusters never straddle train/val)
@@ -63,7 +65,7 @@ USAGE
   python MIQ_main_v2.py --audit            # near-duplicate audit only
   python MIQ_main_v2.py                    # full multi-seed run
 Env: MIQ_TRAIN MIQ_TEST MIQ_SAVE MIQ_EXT MIQ_EPOCHS MIQ_SEEDS MIQ_BACKBONES
-     MIQ_PRETRAINED MIQ_ABL_ALL MIQ_AUDIT GPU_ID
+     MIQ_PRETRAINED MIQ_AUDIT GPU_ID
 """
 
 import os
@@ -179,26 +181,8 @@ BACKBONE_NAMES = [b for b in BACKBONE_REGISTRY if (not _bsel or b in _bsel.split
 
 KINDS = ("BASE", "AUG", "HOMO", "CONS", "MIQ")
 
-ABLATIONS = {
-    "no_inq":     dict(front="raw"),
-    "no_gamma":   dict(q=dict(scale_norm=False)),
-    "no_mask":    dict(q=dict(use_mask=False)),
-    "dct_basis":  dict(q=dict(basis="dct")),
-    "rand_basis": dict(q=dict(basis="rand")),
-    "k1":         dict(q=dict(K=1)),      # log + mask + centre + scale only (no smooth-bias removal)
-    "k6":         dict(q=dict(K=6)),
-    "k24":        dict(q=dict(K=24)),
-    "no_cons":    dict(cons=False),
-    "no_lip":     dict(lip=False),
-}
-ABL_ALL = os.environ.get("MIQ_ABL_ALL", "0") == "1"
-ABL_BACKBONES = BACKBONE_NAMES if ABL_ALL else BACKBONE_NAMES[:1]
-
-MODELS = (
-    [f"{k}_{b}" for k in KINDS for b in BACKBONE_NAMES] +
-    [f"MIQ_{b}_{s}" for b in ABL_BACKBONES for s in ABLATIONS]
-)
-GRADCAM_MODELS = [f"{k}_{b}" for k in KINDS for b in BACKBONE_NAMES]
+MODELS = [f"{k}_{b}" for k in KINDS for b in BACKBONE_NAMES]
+GRADCAM_MODELS = list(MODELS)
 PROPOSED = f"MIQ_{BACKBONE_NAMES[0]}"
 
 METRICS = ["acc", "f1_macro", "precision_macro", "recall_macro", "auc_macro"]
@@ -219,27 +203,17 @@ ALL_COLS = METRICS + ["kappa"] + EXTRA
 
 def short(m):
     return (m.replace("BASE_", "B-").replace("AUG_", "A-").replace("HOMO_", "H-")
-             .replace("CONS_", "C-").replace("MIQ_", "Q-").replace("no_", "O-"))
-
-
-def is_ablation(name):
-    return name.startswith("MIQ_") and any(name.endswith("_" + s) for s in ABLATIONS)
+             .replace("CONS_", "C-").replace("MIQ_", "Q-"))
 
 
 # --------------------------------------------------------------------------
 # Model-name -> config
 # --------------------------------------------------------------------------
 def variant_cfg(name):
-    kind, rest = name.split("_", 1)
-    bname, suf = None, None
-    for b in BACKBONE_REGISTRY:
-        if rest == b:
-            bname = b
-        elif rest.startswith(b + "_"):
-            bname, suf = b, rest[len(b) + 1:]
-    if bname is None:
+    kind, bname = name.split("_", 1)
+    if bname not in BACKBONE_REGISTRY:
         raise ValueError(f"Bad model name: {name}")
-    cfg = dict(front="raw", q={}, aug_nuis=False, cons=False, lip=False)
+    cfg = dict(front="raw", aug_nuis=False, cons=False, lip=False)
     if kind == "AUG":
         cfg["aug_nuis"] = True
     elif kind == "HOMO":
@@ -248,14 +222,6 @@ def variant_cfg(name):
         cfg["cons"] = True
     elif kind == "MIQ":
         cfg.update(front="quotient", cons=True, lip=True)
-        if suf is not None:
-            if suf not in ABLATIONS:
-                raise ValueError(f"Unknown ablation {suf}")
-            for k, v in ABLATIONS[suf].items():
-                if k == "q":
-                    cfg["q"] = dict(v)
-                else:
-                    cfg[k] = v
     elif kind != "BASE":
         raise ValueError(f"Unknown kind {kind}")
     return BACKBONE_REGISTRY[bname], cfg
@@ -267,9 +233,7 @@ def get_dirs(model_name):
         d.mkdir(parents=True, exist_ok=True)
     note = root / "role.txt"
     if not note.exists():
-        if is_ablation(model_name):
-            kind = f"MIQ leave-one-out / sensitivity ablation - {model_name}"
-        elif model_name.startswith("MIQ_"):
+        if model_name.startswith("MIQ_"):
             kind = "Maximal-Invariant Quotient Network - proposed"
         elif model_name.startswith("HOMO_"):
             kind = "Classical homomorphic bias removal + ERM baseline"
@@ -318,7 +282,8 @@ def build_basis(kind, k_total, n, seed=0):
     """Orthonormal basis, rows = modes, shape (k_total, n*n); row 0 = constant (gain).
     Nested: the first k rows span the same space for any k <= k_total.
       'kl'   top (k_total-1) Karhunen-Loeve modes of the in-family bias [Theorem 2]
-      'dct'  lowest-order cosine modes      'rand' random directions (control)"""
+      'dct'  lowest-order cosine modes      'rand' random directions
+    The model uses 'kl'; 'dct' and 'rand' exist only for the Theorem-2 smoke check."""
     P = n * n
     gen = torch.Generator().manual_seed(seed)
     if kind == "kl":
@@ -372,10 +337,9 @@ class QuotientInput(nn.Module):
     Output channels [phi, |grad phi|, tanh(phi)] (all functions of phi only).
     Invariance is exact up to the ridge term (RIDGE) in the projector."""
 
-    def __init__(self, n=IMG_SIZE, K=K_MODES, basis="kl", use_mask=True,
-                 scale_norm=True, thr=MASK_THR, ridge=RIDGE):
+    def __init__(self, n=IMG_SIZE, K=K_MODES, basis="kl", thr=MASK_THR, ridge=RIDGE):
         super().__init__()
-        self.n, self.K, self.use_mask, self.scale_norm = n, K, use_mask, scale_norm
+        self.n, self.K = n, K
         self.thr, self.ridge = thr, ridge
         U_all = build_basis(basis, 2 * K, n)
         self.register_buffer("U", U_all[:K].contiguous())
@@ -397,7 +361,7 @@ class QuotientInput(nn.Module):
     @torch.no_grad()
     def log_and_mask(self, x):
         g = x.float().mean(1, keepdim=True)
-        m = (g > self.thr).float() if self.use_mask else torch.ones_like(g)
+        m = (g > self.thr).float()
         z = torch.log(g.clamp_min(1e-3)) * m
         return z.flatten(1), m.flatten(1)
 
@@ -407,10 +371,7 @@ class QuotientInput(nn.Module):
         z, m = self.log_and_mask(x)
         zp = self.project(z, m)
         nm = m.sum(1).clamp_min(1.0)
-        if self.scale_norm:
-            zp = zp / torch.sqrt((zp ** 2).sum(1) / nm + 1e-6)[:, None]
-        else:
-            zp = zp * 2.0
+        zp = zp / torch.sqrt((zp ** 2).sum(1) / nm + 1e-6)[:, None]
         self.leak_last = (zp @ self.U2.T).norm(dim=1) / (zp.norm(dim=1) + 1e-6)
         self.nm_last = nm
         phi = zp.view(B, 1, H, W)
@@ -551,7 +512,7 @@ class Net(nn.Module):
     def __init__(self, timm_name, nc, cfg):
         super().__init__()
         if cfg["front"] == "quotient":
-            self.front = QuotientInput(**cfg["q"])
+            self.front = QuotientInput()
         elif cfg["front"] == "homo":
             self.front = HomomorphicInput()
         else:
@@ -1286,7 +1247,7 @@ def run_pooled_tests(df):
     Caveat: pairs sharing a backbone are not fully independent; this is a power-gaining
     complement to the per-backbone tests, not a replacement. Bootstrap CI of mean diff included."""
     print("\n=== Pooled family tests (MIQ vs family, paired over backbone x seed) ===")
-    d = df[~df.model.map(is_ablation)].copy()
+    d = df.copy()
     d["kind"] = d.model.str.split("_").str[0]
     d["bb"] = d.model.str.split("_").str[1]
     rows = []
@@ -1408,10 +1369,10 @@ def save_plots(df, extra):
                 ms.append(r[metric].mean()); ss.append(r[metric].std() if len(r) > 1 else 0.0); lb.append(short(m))
         if not ms or np.all(np.isnan(ms)):
             continue
-        fig, ax = plt.subplots(figsize=(18, 6.5))
+        fig, ax = plt.subplots(figsize=(14, 6.5))
         x = np.arange(len(ms))
         ax.bar(x, ms, yerr=np.nan_to_num(ss), color=pal[:len(ms)], edgecolor="k", capsize=3)
-        ax.set_xticks(x); ax.set_xticklabels(lb, rotation=55, ha="right", fontsize=8)
+        ax.set_xticks(x); ax.set_xticklabels(lb, rotation=55, ha="right", fontsize=9)
         ax.set_title(f"{METRIC_LABELS[metric]} (mean +/- std, n={len(SEEDS)} seeds)")
         ax.grid(axis="y", alpha=0.3); plt.tight_layout()
         plt.savefig(SAVE_DIR / f"barplot_{metric}.png", dpi=150, bbox_inches="tight"); plt.close()
@@ -1433,27 +1394,6 @@ def save_plots(df, extra):
                 ax.set_title(kind); ax.set_xlabel("level"); ax.set_ylabel("accuracy"); ax.grid(alpha=0.3)
             axes[0].legend(); fig.suptitle(f"Robustness - {b}"); plt.tight_layout()
             plt.savefig(SAVE_DIR / f"robustness_{b}.png", dpi=150, bbox_inches="tight"); plt.close()
-
-    b = ABL_BACKBONES[0] if ABL_BACKBONES else None
-    if b:
-        full = f"MIQ_{b}"; rows = []
-        for metric in METRICS + EXTRA:
-            fv = df[df.model == full][metric].values
-            if len(fv) == 0:
-                continue
-            for suf in ABLATIONS:
-                av = df[df.model == f"{full}_{suf}"][metric].values
-                if len(av):
-                    rows.append({"ablation": suf, "metric": METRIC_LABELS[metric],
-                                 "delta": float(np.nanmean(av) - np.nanmean(fv))})
-        if rows:
-            piv = pd.DataFrame(rows).pivot(index="ablation", columns="metric", values="delta")
-            piv.to_csv(SAVE_DIR / f"ablation_delta_{b}.csv")
-            fig, ax = plt.subplots(figsize=(15, 6))
-            piv.plot(kind="bar", ax=ax, edgecolor="k", width=0.85)
-            ax.axhline(0, color="k", ls="--"); ax.set_title(f"Delta (ablation - full MIQ) - {b}")
-            ax.grid(axis="y", alpha=0.3); plt.xticks(rotation=20, ha="right"); plt.tight_layout()
-            plt.savefig(SAVE_DIR / f"ablation_delta_{b}.png", dpi=150, bbox_inches="tight"); plt.close()
     print("  [ok] plots saved")
 
 
@@ -1521,7 +1461,6 @@ def smoke_test():
     names = []
     for bn in BACKBONE_REGISTRY:
         names += [f"{k}_{bn}" for k in KINDS]
-    names += [f"MIQ_{list(BACKBONE_REGISTRY)[0]}_{s}" for s in ABLATIONS]
     for nm in names:
         m = create_model(nm, 4)
         npar = sum(p.numel() for p in m.parameters()) / 1e6
@@ -1533,7 +1472,7 @@ def smoke_test():
         cam = GradCAM(m).generate(x[:1], cls=0)[0]
         assert o1.shape == (4, 4) and torch.isfinite(o1).all() and cam.shape == (IMG_SIZE, IMG_SIZE)
         note = ""
-        if nm.startswith("MIQ_") and nm.count("_") == 1:
+        if nm.startswith("MIQ_"):
             with torch.no_grad():
                 yy2, xx2 = torch.meshgrid(torch.arange(IMG_SIZE).float(), torch.arange(IMG_SIZE).float(), indexing="ij")
                 mk = ((((yy2 - 112) / 90) ** 2 + ((xx2 - 112) / 80) ** 2) < 1).float()
@@ -1575,7 +1514,7 @@ if __name__ == "__main__":
     print("  MIQ-Net v2: Maximal-Invariant Quotient Network")
     print(f"  Proposed : {PROPOSED}   Backbones: {BACKBONE_NAMES}")
     print(f"  Seeds    : {SEEDS}   Device: {DEVICE}   Epochs: {EPOCHS}   AMP: {AMP_DTYPE}")
-    print(f"  Models   : {len(MODELS)}  Ablations on: {ABL_BACKBONES}")
+    print(f"  Models   : {len(MODELS)}")
     print("=" * 72)
     save_run_config()
 
@@ -1601,6 +1540,7 @@ if __name__ == "__main__":
 
     df = (pd.read_csv(SAVE_DIR / "all_results.csv")
             .drop_duplicates(subset=["model", "seed"]).reset_index(drop=True))
+    df = df[df.model.isin(MODELS)].reset_index(drop=True)   # drop stale rows from older runs
     cols = [c for c in ALL_COLS + ["params_M", "ms_per_img"] if c in df.columns]
     summary = df.groupby("model")[cols].agg(["mean", "std"]).round(4)
     summary.to_csv(SAVE_DIR / "summary_mean_std.csv")
