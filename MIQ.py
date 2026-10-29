@@ -1,67 +1,67 @@
-# -*- coding: windows-1252 -*-
 # -*- coding: utf-8 -*-
 """
-MIQ_main.py
-===========
-MIQ-Net : Maximal-Invariant Quotient Network
-============================================
+MIQ_main_v2.py
+==============
+MIQ-Net : Maximal-Invariant Quotient Network 
 Brain-tumour MRI classification (glioma | meningioma | notumor | pituitary)
-Backbones (all new vs. TCDA / HCF): ConvNeXtV2-Nano, FastViT-T8, EdgeNeXt-XXS
+Light backbones: EdgeNeXt-XXS (1.3M), FastViT-T8 (3.6M), MobileNetV3-Large (4.2M)
 
 -------------------------------------------------------------------------------
-CORE PRINCIPLE  (one idea, three theorems, one evaluation protocol)
+WHAT IS CLAIMED  (deliberately narrow, so every claim is checkable)
 -------------------------------------------------------------------------------
-MRI nuisance acts on the LOG-image z = log I as a group action
-        z  ->  gamma * z + b ,   gamma > 0 (contrast/gamma),  b in U (smooth bias)
-where U is a K-dim subspace of smooth fields (constant gain included).
-The label is invariant to this group, so the classifier should factor through
-the QUOTIENT space  X / G.
+MRI nuisance acts on the LOG-image z = log I as   z -> gamma*z + b,  gamma>0,
+b in U (K-dim smooth subspace incl. constant gain).  The label is invariant to
+this group, so the classifier can be forced to factor through the quotient X/G.
 
- Theorem 1 (maximal invariant)
-     Phi(z) = P_perp z / ||P_perp z||   (P_perp: mask-weighted projector onto U-perp)
-     is G-invariant AND maximal:  Phi(z1)=Phi(z2)  <=>  z2 = c*z1 + b, c>0, b in U.
-     => all nuisance removed, nothing else removed (lossless quotient).
+ T1 (exact on the masked domain, up to the ridge term)
+     Phi(z) = P_perp z / ||P_perp z||_mask is invariant to z->gamma z+b and
+     Phi(z1)=Phi(z2)  <=>  z2 = c z1 + b, c>0, b in U.
+ T2 (Eckart-Young)  For a bias distribution with covariance C, the top-K KL
+     subspace minimises E||P_perp b||^2.  NOTE: the KL basis here is computed
+     from the SAME Gaussian-random-field family used for the 'bias_in' test, so
+     'bias_in' is an in-family sanity check, NOT independent evidence.
+     Independent evidence = 'bias_out' (unseen frequency) and 'radial'
+     (structurally different parametric gain field), both NEVER used in training.
+ T3 (leakage bound)  ||Phi(z')-Phi(z)|| <= 2||P_perp b_tail|| / (gamma ||P_perp z||)
+     (standard inequality ||a/|a| - b/|b||| <= 2||a-b||/||a||). Measured, not assumed.
 
- Theorem 2 (optimal nuisance subspace)
-     For a bias distribution with covariance C, the K-dim subspace minimising the
-     expected leakage E||P_perp b||^2 is the top-K Karhunen-Loeve (PCA) subspace
-     (Eckart-Young).  Hand-picked DCT / random subspaces are provably no better.
+POSITIONING (what is NOT new):  log-domain bias removal (homomorphic filtering,
+N4), gain/contrast normalisation, spectral-norm Lipschitz heads and consistency
+regularisation are all known.  The study's contribution is the COMBINATION with a
+provable maximal-invariant quotient, the leakage diagnostics, and a protocol with
+controls that separate "quotient" from "augmentation", "consistency loss",
+"classical homomorphic filtering" and "plain log+normalise (K=1)".
 
- Theorem 3 (leakage-controlled invariance gap)
-     If the true bias is b = b_in + b_tail (b_in in U), then
-        || Phi(z') - Phi(z) ||  <=  2 ||P_perp b_tail|| / (gamma ||P_perp z||)
-     and for an L-Lipschitz network f:   ||f(x') - f(x)|| <= L * (that quantity).
-     We measure the left side directly and report an EMPIRICAL local Lipschitz
-     constant plus a per-image LEAKAGE PROXY (energy in the next-K KL modes).
-
-LIMITS (stated honestly): additive/Rician noise and out-of-span (high-frequency)
-bias are NOT removed exactly; the noise / bias_out sweeps expose this.
+LIMITS (stated honestly): additive/Rician noise and out-of-span bias are not
+removed exactly; the sweeps expose this.  Public brain-MRI test accuracy is near
+ceiling, so the headline evidence is robustness / shift / calibration / cost, with
+significance tests, NOT the last 0.2% of clean accuracy.
 
 -------------------------------------------------------------------------------
 MODELS
 -------------------------------------------------------------------------------
- BASE_{b}   : ImageNet-normalised raw image, ERM
- AUG_{b}    : BASE + random nuisance augmentation (shows augmentation < quotient)
- HOMO_{b}   : classical homomorphic bias removal (Gaussian low-pass in log
-              domain) + ERM            (the "N4 + ERM" reviewer baseline)
- MIQ_{b}    : proposed (input quotient + orbit-consistency + Lipschitz head)
- MIQ_{b}_{abl} ablations (see ABLATIONS): no_inq, no_gamma, no_mask, dct_basis,
-              rand_basis, k6, k24, no_cons, no_lip
+ BASE_b  raw ERM | AUG_b raw + nuisance aug | HOMO_b homomorphic filter + ERM
+ CONS_b  raw + orbit-consistency loss (CONTROL: same recipe as MIQ, no quotient)
+ MIQ_b   quotient + orbit-consistency + Lipschitz head (proposed)
+ MIQ_b_{abl}: no_inq, no_gamma, no_mask, dct_basis, rand_basis, k1, k6, k24,
+              no_cons, no_lip
 
-EVALUATION (beyond accuracy)
- * clean test metrics, McNemar / Wilcoxon / paired-t / Holm / bootstrap CIs
- * robustness sweeps: bias_in, bias_out(high-freq), gamma, Rician noise
- * theorem-3 diagnostics: leakage d, empirical Lipschitz, leakage-proxy Spearman
- * shortcut probe: can a linear probe predict the image-size "site" proxy from
-   penultimate features beyond what the label alone explains?
- * train/test near-duplicate audit (average-hash) + accuracy on de-duplicated test
- * optional external dataset (MIQ_EXT) cross-dataset accuracy
+PROTOCOL HARDENING (v2)
+ * validation split is GROUP-aware (near-duplicate clusters never straddle train/val)
+ * test set never used for model selection; test near-duplicates audited, accuracy
+   also reported on the de-duplicated test subset
+ * training nuisance = low-frequency GRF bias + gamma in [0.6,1.6] ONLY;
+   bias_out (grid 12), radial bias, gamma 0.5 / 2.0, Rician noise are held out
+ * metrics: acc/F1/prec/rec/AUC, kappa, ECE, bootstrap CIs, per-seed McNemar,
+   Wilcoxon + paired t + Cohen d_z + Holm, POOLED family tests (backbone x seed)
+ * params and ms/img (front-end included) for the "lightweight" claim
+ * site-shortcut probe, optional external dataset (MIQ_EXT)
 
 USAGE
-  python MIQ_main.py --smoke            # theory + architecture self-test (no data)
-  python MIQ_main.py --check-backbones  # verify timm names / features_only
-  python MIQ_main.py --audit            # near-duplicate audit only
-  python MIQ_main.py                    # full multi-seed run
+  python MIQ_main_v2.py --smoke            # theory + architecture self-test (no data)
+  python MIQ_main_v2.py --check-backbones  # verify timm names / features_only
+  python MIQ_main_v2.py --audit            # near-duplicate audit only
+  python MIQ_main_v2.py                    # full multi-seed run
 Env: MIQ_TRAIN MIQ_TEST MIQ_SAVE MIQ_EXT MIQ_EPOCHS MIQ_SEEDS MIQ_BACKBONES
      MIQ_PRETRAINED MIQ_ABL_ALL MIQ_AUDIT GPU_ID
 """
@@ -71,9 +71,11 @@ import sys
 import gc
 import json
 import math
+import time
 import random
 import itertools
 import warnings
+import platform
 from pathlib import Path
 from copy import deepcopy
 
@@ -101,7 +103,8 @@ from sklearn.metrics import (
     precision_score, recall_score, classification_report, cohen_kappa_score,
     balanced_accuracy_score,
 )
-from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_predict
+from sklearn.model_selection import (train_test_split, StratifiedKFold,
+                                     cross_val_predict, StratifiedGroupKFold)
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
@@ -121,7 +124,7 @@ plt.rcParams.update({
 TRAIN_PATH = os.environ.get("MIQ_TRAIN", "/nfsshare/users/P127163008/brainz/Braintumor dataset/Training/")
 TEST_PATH = os.environ.get("MIQ_TEST", "/nfsshare/users/P127163008/brainz/Braintumor dataset/Test/")
 EXT_PATH = os.environ.get("MIQ_EXT", "")          # optional external ImageFolder
-SAVE_DIR = Path(os.environ.get("MIQ_SAVE", "MIQ_2026_final"))
+SAVE_DIR = Path(os.environ.get("MIQ_SAVE", "MIQ_v2_final"))
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 PRETRAINED = os.environ.get("MIQ_PRETRAINED", "1") == "1"
 RUN_AUDIT = os.environ.get("MIQ_AUDIT", "1") == "1"
@@ -134,40 +137,47 @@ elif torch.cuda.is_available():
 else:
     DEVICE = torch.device("cpu")
 
+# bf16 autocast for the BACKBONE only (quotient front-end stays fp32); no GradScaler needed
+AMP_DTYPE = torch.bfloat16 if (DEVICE.type == "cuda" and torch.cuda.is_bf16_supported()) else None
+
 IMG_SIZE = 224
 LR = 3e-4
-WARMUP_EPOCHS = 3
-EPOCHS = int(os.environ.get("MIQ_EPOCHS", 25))
-PATIENCE = 15
+WARMUP_EPOCHS = 2
+EPOCHS = int(os.environ.get("MIQ_EPOCHS", 20))
+PATIENCE = 8
 LABEL_SMOOTH = 0.08
 CUTMIX_ALPHA = 1.0
 MIXUP_ALPHA = 0.4
 EPS = 1e-8
 ALPHA_STAT = 0.05
-BATCH = 16
-EVAL_BATCH = 32
+BATCH = 32
+EVAL_BATCH = 64
 N_BOOTSTRAP = 2000
-GRADCAM_MAX_PER_CLASS = 50
+GRADCAM_MAX_PER_CLASS = 30
 
 # quotient / nuisance hyper-parameters
-K_MODES = 12                 # dimension of nuisance subspace U (incl. constant)
-MASK_THR = 0.02              # brain mask threshold on [0,1] gray
+K_MODES = 12
+MASK_THR = 0.02
 RIDGE = 1e-3
-GRF_LOW_GRIDS = (3, 4, 5, 6, 7, 8)   # in-family bias correlation scales
-OUT_GRID = 12                         # out-of-family (higher-frequency) bias
-CONS_P = 0.5                 # prob. of an orbit-consistency step
+GRF_LOW_GRIDS = (3, 4, 5, 6, 7, 8)   # in-family bias scales (training + bias_in test)
+OUT_GRID = 12                         # HELD-OUT higher-frequency bias (test only)
+P_OUT_TRAIN = 0.0                     # fraction of training nuisance using OUT_GRID (0 => truly unseen)
+CONS_P = 0.5
 CONS_LAMBDA = 1.0
 DETERMINISTIC_SYNTH_SEED = 777
+DUP_HAMMING = 4
 
 SEEDS = [int(s) for s in os.environ.get("MIQ_SEEDS", "42,123,456,789,2024").split(",")]
 
 BACKBONE_REGISTRY = {
-    "ConvNeXtV2Nano": "convnextv2_nano.fcmae_ft_in1k",
-    "FastViTT8":      "fastvit_t8.apple_in1k",
-    "EdgeNeXtXXS":    "edgenext_xx_small.in1k",
+    "EdgeNeXtXXS":  "edgenext_xx_small.in1k",
+    "FastViTT8":    "fastvit_t8.apple_in1k",
+    "MobileNetV3L": "mobilenetv3_large_100.ra_in1k",
 }
 _bsel = os.environ.get("MIQ_BACKBONES")
 BACKBONE_NAMES = [b for b in BACKBONE_REGISTRY if (not _bsel or b in _bsel.split(","))]
+
+KINDS = ("BASE", "AUG", "HOMO", "CONS", "MIQ")
 
 ABLATIONS = {
     "no_inq":     dict(front="raw"),
@@ -175,6 +185,7 @@ ABLATIONS = {
     "no_mask":    dict(q=dict(use_mask=False)),
     "dct_basis":  dict(q=dict(basis="dct")),
     "rand_basis": dict(q=dict(basis="rand")),
+    "k1":         dict(q=dict(K=1)),      # log + mask + centre + scale only (no smooth-bias removal)
     "k6":         dict(q=dict(K=6)),
     "k24":        dict(q=dict(K=24)),
     "no_cons":    dict(cons=False),
@@ -184,31 +195,31 @@ ABL_ALL = os.environ.get("MIQ_ABL_ALL", "0") == "1"
 ABL_BACKBONES = BACKBONE_NAMES if ABL_ALL else BACKBONE_NAMES[:1]
 
 MODELS = (
-    [f"BASE_{b}" for b in BACKBONE_NAMES] +
-    [f"AUG_{b}" for b in BACKBONE_NAMES] +
-    [f"HOMO_{b}" for b in BACKBONE_NAMES] +
-    [f"MIQ_{b}" for b in BACKBONE_NAMES] +
+    [f"{k}_{b}" for k in KINDS for b in BACKBONE_NAMES] +
     [f"MIQ_{b}_{s}" for b in ABL_BACKBONES for s in ABLATIONS]
 )
-GRADCAM_MODELS = [m for m in MODELS if not is_abl] if (is_abl := False) else \
-    [f"{k}_{b}" for k in ("BASE", "AUG", "HOMO", "MIQ") for b in BACKBONE_NAMES]
+GRADCAM_MODELS = [f"{k}_{b}" for k in KINDS for b in BACKBONE_NAMES]
 PROPOSED = f"MIQ_{BACKBONE_NAMES[0]}"
 
 METRICS = ["acc", "f1_macro", "precision_macro", "recall_macro", "auc_macro"]
-EXTRA = ["acc_bias_in", "acc_bias_out", "acc_gamma", "acc_noise", "site_excess"]
+EXTRA = ["acc_bias_in", "acc_bias_out", "acc_radial", "acc_gamma", "acc_noise",
+         "site_excess", "ece", "acc_dedup", "acc_ext"]
+LOWER_BETTER = {"site_excess", "ece"}
 METRIC_LABELS = {
     "acc": "Accuracy", "f1_macro": "Macro F1", "precision_macro": "Macro Precision",
     "recall_macro": "Macro Recall", "auc_macro": "Macro AUC", "kappa": "Cohen kappa",
-    "acc_bias_in": "Acc | in-family bias s=1", "acc_bias_out": "Acc | high-freq bias s=1",
-    "acc_gamma": "Acc | gamma=0.5", "acc_noise": "Acc | Rician sigma=0.05",
-    "site_excess": "Site-probe excess (lower=better)",
+    "acc_bias_in": "Acc | in-family bias s=1", "acc_bias_out": "Acc | held-out high-freq bias s=1",
+    "acc_radial": "Acc | held-out radial bias s=1",
+    "acc_gamma": "Acc | gamma=0.5 (extrapolated)", "acc_noise": "Acc | Rician sigma=0.05",
+    "site_excess": "Site-probe excess (lower=better)", "ece": "ECE (lower=better)",
+    "acc_dedup": "Acc | de-duplicated test", "acc_ext": "Acc | external dataset",
 }
 ALL_COLS = METRICS + ["kappa"] + EXTRA
 
 
 def short(m):
     return (m.replace("BASE_", "B-").replace("AUG_", "A-").replace("HOMO_", "H-")
-             .replace("MIQ_", "Q-").replace("no_", "Ø"))
+             .replace("CONS_", "C-").replace("MIQ_", "Q-").replace("no_", "O-"))
 
 
 def is_ablation(name):
@@ -233,13 +244,14 @@ def variant_cfg(name):
         cfg["aug_nuis"] = True
     elif kind == "HOMO":
         cfg["front"] = "homo"
+    elif kind == "CONS":
+        cfg["cons"] = True
     elif kind == "MIQ":
         cfg.update(front="quotient", cons=True, lip=True)
         if suf is not None:
             if suf not in ABLATIONS:
                 raise ValueError(f"Unknown ablation {suf}")
-            ab = ABLATIONS[suf]
-            for k, v in ab.items():
+            for k, v in ABLATIONS[suf].items():
                 if k == "q":
                     cfg["q"] = dict(v)
                 else:
@@ -249,9 +261,6 @@ def variant_cfg(name):
     return BACKBONE_REGISTRY[bname], cfg
 
 
-# --------------------------------------------------------------------------
-# Directories
-# --------------------------------------------------------------------------
 def get_dirs(model_name):
     root = SAVE_DIR / model_name
     for d in [root / "metrics", root / "curves", root / "gradcam", root / "preds"]:
@@ -264,6 +273,8 @@ def get_dirs(model_name):
             kind = "Maximal-Invariant Quotient Network - proposed"
         elif model_name.startswith("HOMO_"):
             kind = "Classical homomorphic bias removal + ERM baseline"
+        elif model_name.startswith("CONS_"):
+            kind = "Raw input + orbit-consistency loss (control for MIQ training recipe)"
         elif model_name.startswith("AUG_"):
             kind = "ERM + nuisance augmentation baseline"
         else:
@@ -280,11 +291,21 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
 
 
+def save_run_config():
+    cfg = dict(python=platform.python_version(), torch=torch.__version__, timm=timm.__version__,
+               device=str(DEVICE), amp=str(AMP_DTYPE), seeds=SEEDS, epochs=EPOCHS, batch=BATCH,
+               lr=LR, patience=PATIENCE, k_modes=K_MODES, ridge=RIDGE, mask_thr=MASK_THR,
+               grf_low_grids=list(GRF_LOW_GRIDS), out_grid=OUT_GRID, p_out_train=P_OUT_TRAIN,
+               cons_p=CONS_P, cons_lambda=CONS_LAMBDA, backbones=BACKBONE_REGISTRY,
+               models=MODELS, proposed=PROPOSED, train_path=TRAIN_PATH, test_path=TEST_PATH,
+               ext_path=EXT_PATH)
+    (SAVE_DIR / "run_config.json").write_text(json.dumps(cfg, indent=2))
+
+
 # ==========================================================================
 # THEORY CORE
 # ==========================================================================
 def _gauss_field_vectors(n_per_grid, grids, out_size, gen):
-    """Zero-mean smooth random fields (bilinear upsampled white noise)."""
     xs = []
     for g in grids:
         nz = torch.randn(n_per_grid, 1, g, g, generator=gen)
@@ -294,15 +315,10 @@ def _gauss_field_vectors(n_per_grid, grids, out_size, gen):
 
 
 def build_basis(kind, k_total, n, seed=0):
-    """
-    Orthonormal (under the uniform inner product) basis, rows = modes, shape (k_total, n*n).
-    Row 0 is always the constant mode (global gain).  Nested: first k rows span the
-    same space for any k <= k_total (Gram-Schmidt via QR).
-      kind='kl'   : top (k_total-1) Karhunen-Loeve modes of the in-family bias
-                    distribution  [Theorem 2]
-      kind='dct'  : lowest-order cosine modes
-      kind='rand' : random Gaussian directions (control)
-    """
+    """Orthonormal basis, rows = modes, shape (k_total, n*n); row 0 = constant (gain).
+    Nested: the first k rows span the same space for any k <= k_total.
+      'kl'   top (k_total-1) Karhunen-Loeve modes of the in-family bias [Theorem 2]
+      'dct'  lowest-order cosine modes      'rand' random directions (control)"""
     P = n * n
     gen = torch.Generator().manual_seed(seed)
     if kind == "kl":
@@ -325,7 +341,7 @@ def build_basis(kind, k_total, n, seed=0):
     else:
         raise ValueError(kind)
     M = torch.cat([torch.ones(1, P), modes])
-    Q, _ = torch.linalg.qr(M.T)                       # (P, k_total)
+    Q, _ = torch.linalg.qr(M.T)
     return Q.T.contiguous()
 
 
@@ -341,8 +357,6 @@ class Sobel(nn.Module):
 
 
 class RawInput(nn.Module):
-    """ImageNet normalisation of a [0,1] RGB image (baseline front-end)."""
-
     def __init__(self):
         super().__init__()
         self.register_buffer("m", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
@@ -353,13 +367,10 @@ class RawInput(nn.Module):
 
 
 class QuotientInput(nn.Module):
-    """
-    Maximal-invariant quotient front-end (Theorem 1).
-      g   = gray(x) in [0,1];  m = brain mask;  z = log g  (inside mask)
-      zp  = P_perp z   (mask-weighted least-squares removal of U)
-      phi = zp / RMS(zp)                      -> exact invariance to z -> gamma z + b
-    Output: 3 channels  [phi, |grad phi|, tanh(phi)]  (all functions of phi only).
-    """
+    """Maximal-invariant quotient front-end (Theorem 1).
+    g = gray(x); m = brain mask; z = log g; zp = P_perp z; phi = zp / RMS(zp).
+    Output channels [phi, |grad phi|, tanh(phi)] (all functions of phi only).
+    Invariance is exact up to the ridge term (RIDGE) in the projector."""
 
     def __init__(self, n=IMG_SIZE, K=K_MODES, basis="kl", use_mask=True,
                  scale_norm=True, thr=MASK_THR, ridge=RIDGE):
@@ -377,16 +388,15 @@ class QuotientInput(nn.Module):
 
     @torch.no_grad()
     def project(self, z, m):
-        """z, m: (B,P).  Returns mask-weighted P_perp z (B,P)  (linear in z)."""
-        Um = self.U[None] * m[:, None, :]                       # (B,K,P)
-        G = Um @ self.U.T + self.ridge * self.I_K               # (B,K,K)
+        Um = self.U[None] * m[:, None, :]
+        G = Um @ self.U.T + self.ridge * self.I_K
         r = torch.einsum("bkp,bp->bk", Um, z)
-        c = torch.linalg.solve(G, r.unsqueeze(-1)).squeeze(-1)  # (B,K)
+        c = torch.linalg.solve(G, r.unsqueeze(-1)).squeeze(-1)
         return (z - c @ self.U) * m
 
     @torch.no_grad()
     def log_and_mask(self, x):
-        g = x.mean(1, keepdim=True)
+        g = x.float().mean(1, keepdim=True)
         m = (g > self.thr).float() if self.use_mask else torch.ones_like(g)
         z = torch.log(g.clamp_min(1e-3)) * m
         return z.flatten(1), m.flatten(1)
@@ -401,7 +411,6 @@ class QuotientInput(nn.Module):
             zp = zp / torch.sqrt((zp ** 2).sum(1) / nm + 1e-6)[:, None]
         else:
             zp = zp * 2.0
-        # leakage proxy: energy of phi in the NEXT K KL modes (outside U)
         self.leak_last = (zp @ self.U2.T).norm(dim=1) / (zp.norm(dim=1) + 1e-6)
         self.nm_last = nm
         phi = zp.view(B, 1, H, W)
@@ -431,7 +440,7 @@ class HomomorphicInput(nn.Module):
 
     @torch.no_grad()
     def forward(self, x):
-        g = x.mean(1, keepdim=True)
+        g = x.float().mean(1, keepdim=True)
         m = (g > self.thr).float()
         z = torch.log(g.clamp_min(1e-3)) * m
         low = self.blur(z * m) / (self.blur(m) + 1e-3)
@@ -458,22 +467,39 @@ def bias_field(B, n, grid, device, gen=None):
     return f / (f.std((2, 3), keepdim=True) + 1e-6)
 
 
-def apply_nuisance(x, s, gamma, grid, gen=None):
-    """x in [0,1]: x' = rescale( x^gamma * exp(s * bias_field) ).  Background 0 stays 0."""
-    f = bias_field(x.size(0), x.size(-1), grid, x.device, gen)
-    xp = x.clamp_min(0) ** _bc(gamma, x) * torch.exp(_bc(s, x) * f)
+def _renorm(xp):
     return xp / xp.amax((1, 2, 3), keepdim=True).clamp_min(1e-6)
+
+
+def apply_nuisance(x, s, gamma, grid, gen=None):
+    """x' = rescale( x^gamma * exp(s * GRF bias) ).  Background 0 stays 0."""
+    f = bias_field(x.size(0), x.size(-1), grid, x.device, gen)
+    return _renorm(x.clamp_min(0) ** _bc(gamma, x) * torch.exp(_bc(s, x) * f))
+
+
+def apply_radial(x, s, gen=None):
+    """HELD-OUT bias family: smooth parametric radial (coil-sensitivity / vignetting-like)
+    gain with random centre; structurally different from the Gaussian-field training family."""
+    B, _, H, W = x.shape
+    yy, xx = torch.meshgrid(torch.linspace(-1, 1, H, device=x.device),
+                            torch.linspace(-1, 1, W, device=x.device), indexing="ij")
+    cy = (torch.rand(B, 1, 1, device=x.device, generator=gen) - 0.5) * 0.8
+    cx = (torch.rand(B, 1, 1, device=x.device, generator=gen) - 0.5) * 0.8
+    f = -((yy[None] - cy) ** 2 + (xx[None] - cx) ** 2).unsqueeze(1)
+    f = f - f.mean((2, 3), keepdim=True)
+    f = f / (f.std((2, 3), keepdim=True) + 1e-6)
+    return _renorm(x.clamp_min(0) * torch.exp(_bc(s, x) * f))
 
 
 def apply_rician(x, sigma, gen=None):
     n1 = torch.randn(x.shape, generator=gen, device=x.device)
     n2 = torch.randn(x.shape, generator=gen, device=x.device)
-    xp = torch.sqrt((x + sigma * n1) ** 2 + (sigma * n2) ** 2)
-    return xp / xp.amax((1, 2, 3), keepdim=True).clamp_min(1e-6)
+    return _renorm(torch.sqrt((x + sigma * n1) ** 2 + (sigma * n2) ** 2))
 
 
-def synth_random(x, p_apply=1.0, p_out=0.3):
-    """Random nuisance used for AUG baseline and MIQ orbit-consistency."""
+def synth_random(x, p_apply=1.0, p_out=P_OUT_TRAIN):
+    """Training nuisance (AUG baseline, CONS and MIQ orbit-consistency).
+    gamma in [0.6,1.6], bias scale in [0.3,1.2], LOW-frequency grids only by default."""
     B = x.size(0)
     gamma = torch.exp(torch.empty(B, device=x.device).uniform_(math.log(0.6), math.log(1.6)))
     s = torch.empty(B, device=x.device).uniform_(0.3, 1.2)
@@ -492,6 +518,8 @@ def perturb(x, kind, level, gen):
         return apply_nuisance(x, level, 1.0, 5, gen)
     if kind == "bias_out":
         return apply_nuisance(x, level, 1.0, OUT_GRID, gen)
+    if kind == "radial":
+        return apply_radial(x, level, gen)
     if kind == "gamma":
         return apply_nuisance(x, 0.0, level, 5, gen)
     if kind == "noise":
@@ -501,8 +529,10 @@ def perturb(x, kind, level, gen):
 
 ROBUST_CONDS = ([("bias_in", s) for s in (0.5, 1.0, 1.5, 2.0)] +
                 [("bias_out", s) for s in (0.5, 1.0, 1.5, 2.0)] +
+                [("radial", s) for s in (0.5, 1.0, 1.5, 2.0)] +
                 [("gamma", g) for g in (0.5, 0.75, 1.5, 2.0)] +
                 [("noise", s) for s in (0.02, 0.05)])
+ROBUST_KINDS = ["bias_in", "bias_out", "radial", "gamma", "noise"]
 
 
 # ==========================================================================
@@ -539,7 +569,12 @@ class Net(nn.Module):
         self.last_embed = None
 
     def forward(self, x):
-        feat = self.bb(self.front(x))[-1]
+        z = self.front(x)                                    # fp32 front-end
+        use_amp = AMP_DTYPE is not None and x.is_cuda
+        with torch.autocast(device_type="cuda" if x.is_cuda else "cpu",
+                            dtype=AMP_DTYPE or torch.bfloat16, enabled=use_amp):
+            feat = self.bb(z)[-1]
+        feat = feat.float()
         self.last_feat = feat
         pooled = F.adaptive_avg_pool2d(feat, 1).flatten(1)
         self.last_embed = pooled
@@ -552,7 +587,7 @@ class Net(nn.Module):
     def head_lipschitz(self):
         if self.logit_scale is None:
             return float("nan")
-        return float(torch.exp(self.logit_scale))   # ||W||_2 <= 1 by spectral norm
+        return float(torch.exp(self.logit_scale))
 
 
 def create_model(name, nc):
@@ -655,6 +690,16 @@ def _macro_auc(yt, ypr):
     return float(np.mean(vals)) if vals else float("nan")
 
 
+def ece_score(y_true, y_prob, n_bins=15):
+    conf = y_prob.max(1); corr = (y_prob.argmax(1) == y_true).astype(float)
+    edges = np.linspace(0, 1, n_bins + 1); e = 0.0
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        m = (conf > lo) & (conf <= hi)
+        if m.any():
+            e += m.mean() * abs(corr[m].mean() - conf[m].mean())
+    return float(e)
+
+
 def bootstrap_ci(y_true, y_pred, y_prob, n_boot=N_BOOTSTRAP, alpha=0.05):
     n = len(y_true); rng = np.random.RandomState(42)
     acc = {m: [] for m in METRICS}
@@ -699,7 +744,7 @@ def save_test_metrics(model_name, seed, classes, y_true, y_pred, y_prob, out_dir
 
 
 # ==========================================================================
-# Dataset audit (near-duplicate leakage) / site proxy / external set
+# Dataset audit / group split / site proxy
 # ==========================================================================
 _POP = np.array([bin(i).count("1") for i in range(256)], dtype=np.uint8)
 
@@ -710,7 +755,7 @@ def _ahash(path):
     return np.packbits((a > a.mean()).flatten())            # 32 bytes
 
 
-def audit_leakage(max_hamming=4):
+def audit_leakage(max_hamming=DUP_HAMMING):
     out_csv = SAVE_DIR / "audit_leakage.csv"
     idx_npy = SAVE_DIR / "dup_test_idx.npy"
     tr = datasets.ImageFolder(TRAIN_PATH); te = datasets.ImageFolder(TEST_PATH)
@@ -727,7 +772,6 @@ def audit_leakage(max_hamming=4):
             if dm[k] <= max_hamming:
                 dup.append(i0 + k)
                 same_label.append(te.targets[i0 + k] == tr.targets[j[k]])
-    # within-train duplicates (cheap, sampled)
     pd.DataFrame([{"n_train": len(H_tr), "n_test": len(H_te), "max_hamming": max_hamming,
                    "n_test_near_dup_of_train": len(dup),
                    "pct_test_near_dup": round(100 * len(dup) / len(H_te), 3),
@@ -739,6 +783,49 @@ def audit_leakage(max_hamming=4):
     return dup
 
 
+def train_groups(max_hamming=DUP_HAMMING):
+    """Near-duplicate clusters inside the training set (union-find on average-hash).
+    Used so that a cluster never straddles the train / validation split."""
+    path = SAVE_DIR / "train_groups.npy"
+    if path.exists():
+        return np.load(path)
+    tr = datasets.ImageFolder(TRAIN_PATH)
+    H = np.stack([_ahash(p) for p, _ in tr.samples]); n = len(H)
+    parent = np.arange(n)
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]; a = parent[a]
+        return a
+
+    for i0 in range(0, n, 128):
+        blk = H[i0:i0 + 128]
+        d = _POP[np.bitwise_xor(blk[:, None, :], H[None, :, :])].sum(-1)
+        ii, jj = np.where(d <= max_hamming)
+        for a, b in zip(ii + i0, jj):
+            if a != b:
+                ra, rb = find(int(a)), find(int(b))
+                if ra != rb:
+                    parent[ra] = rb
+    groups = np.array([find(i) for i in range(n)])
+    np.save(path, groups)
+    print(f"[groups] {n} train images -> {len(np.unique(groups))} near-duplicate clusters")
+    return groups
+
+
+def make_split(targets, seed):
+    targets = np.asarray(targets)
+    try:
+        groups = train_groups()
+        sgkf = StratifiedGroupKFold(n_splits=7, shuffle=True, random_state=seed)
+        tr, va = next(iter(sgkf.split(np.zeros(len(targets)), targets, groups)))
+        return tr, va
+    except Exception as e:
+        print(f"  ! group split unavailable ({e}); falling back to stratified split")
+        return train_test_split(np.arange(len(targets)), test_size=0.15,
+                                stratify=targets, random_state=seed)
+
+
 def site_groups(samples, min_count=15):
     sizes = []
     for p, _ in samples:
@@ -748,8 +835,7 @@ def site_groups(samples, min_count=15):
             sizes.append((0, 0))
     keys, counts = np.unique(np.array([f"{w}x{h}" for w, h in sizes]), return_counts=True)
     keep = {k for k, c in zip(keys, counts) if c >= min_count}
-    lab = np.array([f"{w}x{h}" if f"{w}x{h}" in keep else "other" for w, h in sizes])
-    return lab
+    return np.array([f"{w}x{h}" if f"{w}x{h}" in keep else "other" for w, h in sizes])
 
 
 def site_probe(emb, labels, sites):
@@ -770,6 +856,19 @@ def site_probe(emb, labels, sites):
     b_lab = balanced_accuracy_score(sites, base.astype(str))
     return dict(site_bacc=float(b_probe), label_only_bacc=float(b_lab),
                 site_excess=float(b_probe - b_lab), n_sites=len(u))
+
+
+def measure_latency(model, xu8, n=64):
+    model.eval()
+    x = xu8[:n].to(DEVICE).float() / 255.0
+    sync = torch.cuda.synchronize if DEVICE.type == "cuda" else (lambda: None)
+    with torch.no_grad():
+        model(x[:8]); sync()
+        t = time.perf_counter()
+        for i in range(0, len(x), 32):
+            model(x[i:i + 32])
+        sync()
+    return 1000.0 * (time.perf_counter() - t) / len(x)
 
 
 # ==========================================================================
@@ -828,6 +927,31 @@ def robustness_eval(model, xu8, y_true):
 
 
 # ==========================================================================
+# Plot helper (colour-coded dual-axis training curves)
+# ==========================================================================
+def plot_curves(hist, title, path):
+    LOSS_C, ACC_C = "#1f4e9c", "#c0392b"     # blue = loss (left axis), red = accuracy (right axis)
+    fig, ax1 = plt.subplots(figsize=(10, 5))
+    ax1.plot(hist["epoch"], hist["train_loss"], "-", color=LOSS_C, marker="o", ms=3, label="Train loss")
+    ax1.plot(hist["epoch"], hist["val_loss"], "--", color=LOSS_C, marker="s", ms=3, alpha=0.65, label="Val loss")
+    ax2 = ax1.twinx()
+    ax2.plot(hist["epoch"], hist["train_acc"], "-", color=ACC_C, marker="^", ms=3, label="Train acc")
+    ax2.plot(hist["epoch"], hist["val_acc"], "--", color=ACC_C, marker="v", ms=3, alpha=0.65, label="Val acc")
+    ax1.set_xlabel("Epoch")
+    ax1.set_ylabel("Loss", color=LOSS_C)
+    ax2.set_ylabel("Accuracy", color=ACC_C)
+    ax1.tick_params(axis="y", colors=LOSS_C)
+    ax2.tick_params(axis="y", colors=ACC_C)
+    ax1.spines["left"].set_color(LOSS_C); ax1.spines["left"].set_linewidth(2.2)
+    ax2.spines["right"].set_color(ACC_C); ax2.spines["right"].set_linewidth(2.2)
+    ax1.grid(alpha=0.3)
+    ln = ax1.get_lines() + ax2.get_lines()
+    ax1.legend(ln, [l.get_label() for l in ln], loc="center right")
+    ax1.set_title(title); plt.tight_layout()
+    plt.savefig(path, dpi=130, bbox_inches="tight"); plt.close()
+
+
+# ==========================================================================
 # Train + evaluate one (model, seed)
 # ==========================================================================
 def run_one_seed(seed, model_name):
@@ -862,15 +986,15 @@ def run_one_seed(seed, model_name):
     test_ds = datasets.ImageFolder(TEST_PATH, transform=val_tf)
     classes = full_train.classes; nc = len(classes)
 
-    train_idx, val_idx = train_test_split(np.arange(len(full_train)), test_size=0.15,
-                                          stratify=full_train.targets, random_state=seed)
+    train_idx, val_idx = make_split(full_train.targets, seed)
     train_loader = DataLoader(Subset(full_train, train_idx), batch_size=BATCH, shuffle=True,
-                              num_workers=4, pin_memory=True)
+                              num_workers=4, pin_memory=True, drop_last=True)
     val_loader = DataLoader(Subset(full_val_ref, val_idx), batch_size=EVAL_BATCH,
                             shuffle=False, num_workers=2)
     test_loader = DataLoader(test_ds, batch_size=EVAL_BATCH, shuffle=False, num_workers=2)
 
     model = create_model(model_name, nc).to(DEVICE)
+    params_m = sum(p.numel() for p in model.parameters()) / 1e6
     optimizer = optim.AdamW(build_param_groups(model), lr=LR)
     criterion = FocalLoss()
     best_loss, best_state, pat = float("inf"), None, 0
@@ -896,7 +1020,6 @@ def run_one_seed(seed, model_name):
                 if cfg["aug_nuis"]:
                     x = synth_random(x, p_apply=0.5)
                 if cfg["cons"] and x.size(0) > 1 and random.random() < CONS_P:
-                    # orbit-consistency step: x and a nuisance-transformed copy
                     l1 = model(x)[0]; l2 = model(synth_random(x))[0]
                     loss = 0.5 * (criterion(l1, y) + criterion(l2, y)) + CONS_LAMBDA * sym_kl(l1, l2)
                     logits = l1
@@ -943,7 +1066,7 @@ def run_one_seed(seed, model_name):
     model.load_state_dict(best_state); model.eval()
     pd.DataFrame(hist).to_csv(dirs["metrics"] / f"history_seed{seed}.csv", index=False)
 
-    # ---- clean test inference (+ embeddings + uint8 cache for robustness)
+    # ---- clean test inference (+ embeddings + uint8 cache)
     yt_l, ypr_l, emb_l, xu8_l = [], [], [], []
     with torch.no_grad():
         for x, y in test_loader:
@@ -955,8 +1078,10 @@ def run_one_seed(seed, model_name):
     y_true = np.concatenate(yt_l); y_prob = np.concatenate(ypr_l); y_pred = y_prob.argmax(1)
     emb = np.concatenate(emb_l); xu8 = torch.cat(xu8_l)
     np.savez(dirs["preds"] / f"preds_seed{seed}.npz", y_true=y_true, y_pred=y_pred, y_prob=y_prob)
+    ece = ece_score(y_true, y_prob)
+    ms_img = measure_latency(model, xu8)
 
-    # ---- robustness sweeps + theorem-3 diagnostics
+    # ---- robustness + theorem-3 diagnostics
     rob, diag = robustness_eval(model, xu8, y_true)
     rob.insert(0, "seed", seed); rob.insert(0, "model", model_name)
     rob.to_csv(dirs["metrics"] / f"robust_seed{seed}.csv", index=False)
@@ -1044,26 +1169,22 @@ def run_one_seed(seed, model_name):
     ax.set_title(f"CM - {model_name} s{seed}"); plt.tight_layout()
     plt.savefig(dirs["metrics"] / f"cm_seed{seed}.png", dpi=130, bbox_inches="tight"); plt.close()
 
-    fig, ax1 = plt.subplots(figsize=(10, 5))
-    ax1.plot(hist["epoch"], hist["train_loss"], "b-", label="Train loss")
-    ax1.plot(hist["epoch"], hist["val_loss"], "c--", label="Val loss")
-    ax2 = ax1.twinx()
-    ax2.plot(hist["epoch"], hist["train_acc"], "r-", label="Train acc")
-    ax2.plot(hist["epoch"], hist["val_acc"], "m--", label="Val acc")
-    ln = ax1.get_lines() + ax2.get_lines(); ax1.legend(ln, [l.get_label() for l in ln], loc="center right")
-    ax1.set_title(f"{model_name} - Seed {seed}"); plt.tight_layout()
-    plt.savefig(dirs["curves"] / f"curves_seed{seed}.png", dpi=130, bbox_inches="tight"); plt.close()
+    plot_curves(hist, f"{model_name} - Seed {seed}", dirs["curves"] / f"curves_seed{seed}.png")
 
-    print(f"  [ok] Acc={acc:.4f} F1={mf1:.4f} AUC={mauc:.4f} | bias_in={racc('bias_in', 1.0):.3f} "
-          f"bias_out={racc('bias_out', 1.0):.3f} gamma={racc('gamma', 0.5):.3f} "
-          f"noise={racc('noise', 0.05):.3f} | site_excess={probe['site_excess']:.3f}")
+    print(f"  [ok] Acc={acc:.4f} F1={mf1:.4f} AUC={mauc:.4f} ECE={ece:.4f} | "
+          f"bias_in={racc('bias_in', 1.0):.3f} bias_out={racc('bias_out', 1.0):.3f} "
+          f"radial={racc('radial', 1.0):.3f} gamma={racc('gamma', 0.5):.3f} "
+          f"noise={racc('noise', 0.05):.3f} | site_excess={probe['site_excess']:.3f} | "
+          f"{params_m:.2f}M params, {ms_img:.2f} ms/img")
     return {"seed": seed, "model": model_name, "acc": round(acc, 4), "f1_macro": round(mf1, 4),
             "precision_macro": round(mprec, 4), "recall_macro": round(mrec, 4),
             "auc_macro": round(mauc, 4), "kappa": round(kappa, 4),
             "acc_bias_in": racc("bias_in", 1.0), "acc_bias_out": racc("bias_out", 1.0),
+            "acc_radial": racc("radial", 1.0),
             "acc_gamma": racc("gamma", 0.5), "acc_noise": racc("noise", 0.05),
-            "site_excess": probe["site_excess"], "acc_dedup": acc_dedup, "acc_ext": acc_ext,
-            "head_L": model.head_lipschitz()}
+            "site_excess": probe["site_excess"], "ece": ece, "acc_dedup": acc_dedup,
+            "acc_ext": acc_ext, "head_L": model.head_lipschitz(),
+            "params_M": round(params_m, 3), "ms_per_img": round(ms_img, 3)}
 
 
 # ==========================================================================
@@ -1130,7 +1251,8 @@ def run_mcnemar_all_seeds():
 
 
 def run_paired_stats(df):
-    """n=5 seeds: exact Wilcoxon cannot go below p=0.0625; t-test, d_z and Fisher-McNemar decide."""
+    """n seeds paired per model pair. With n=5 exact Wilcoxon cannot go below p=0.0625;
+    the paired t-test, d_z, Fisher-McNemar and the POOLED tests below carry the inference."""
     print("\n=== Wilcoxon + paired t-test + Cohen d_z ===")
     rows = []
     for metric in ALL_COLS:
@@ -1159,6 +1281,61 @@ def run_paired_stats(df):
     return res
 
 
+def run_pooled_tests(df):
+    """MIQ vs each baseline FAMILY pooled over (backbone x seed) pairs (n = #backbones*#seeds).
+    Caveat: pairs sharing a backbone are not fully independent; this is a power-gaining
+    complement to the per-backbone tests, not a replacement. Bootstrap CI of mean diff included."""
+    print("\n=== Pooled family tests (MIQ vs family, paired over backbone x seed) ===")
+    d = df[~df.model.map(is_ablation)].copy()
+    d["kind"] = d.model.str.split("_").str[0]
+    d["bb"] = d.model.str.split("_").str[1]
+    rows = []
+    for metric in ALL_COLS:
+        if metric not in d.columns:
+            continue
+        piv = d.pivot_table(index=["bb", "seed"], columns="kind", values=metric)
+        if "MIQ" not in piv.columns:
+            continue
+        sub = []
+        for fam in ("BASE", "AUG", "HOMO", "CONS"):
+            if fam not in piv.columns:
+                continue
+            pr = piv[["MIQ", fam]].dropna()
+            if len(pr) < 6:
+                continue
+            a, b = pr["MIQ"].values, pr[fam].values; diff = a - b
+            try:
+                w_p = float(wilcoxon(a, b)[1])
+            except ValueError:
+                w_p = np.nan
+            try:
+                t_p = float(ttest_rel(a, b)[1])
+            except Exception:
+                t_p = np.nan
+            sd = diff.std(ddof=1)
+            dz = float(diff.mean() / sd) if sd > 0 else np.nan
+            rng = np.random.RandomState(0)
+            bs = [diff[rng.randint(0, len(diff), len(diff))].mean() for _ in range(5000)]
+            lo, hi = np.percentile(bs, [2.5, 97.5])
+            win = (-diff.mean() if metric in LOWER_BETTER else diff.mean()) > 0
+            sub.append({"metric": metric, "family": fam, "n_pairs": len(pr),
+                        "MIQ_mean": float(a.mean()), "family_mean": float(b.mean()),
+                        "delta": float(diff.mean()), "delta_ci_lo": float(lo), "delta_ci_hi": float(hi),
+                        "cohen_dz": dz, "wilcoxon_p": w_p, "ttest_p": t_p, "numerical_win": bool(win)})
+        if sub:
+            adj = holm_adjust([s["ttest_p"] for s in sub])
+            for s, a_ in zip(sub, adj):
+                s["ttest_p_holm"] = float(a_)
+                s["verdict"] = ("SIGNIFICANT WIN" if (s["numerical_win"] and a_ < ALPHA_STAT)
+                                else ("numerical win" if s["numerical_win"] else "no win"))
+            rows.extend(sub)
+    res = pd.DataFrame(rows)
+    res.to_csv(SAVE_DIR / "pooled_family_tests.csv", index=False)
+    if not res.empty:
+        print(res.round(4).to_string(index=False))
+    return res
+
+
 def build_superiority_table(df, mc_df, wt_df):
     mc = {}
     if not mc_df.empty:
@@ -1173,7 +1350,7 @@ def build_superiority_table(df, mc_df, wt_df):
     rows = []
     for metric in ALL_COLS:
         sub = []
-        lower_better = metric == "site_excess"
+        lower_better = metric in LOWER_BETTER
         for m in MODELS:
             if m == PROPOSED or (metric, PROPOSED, m) not in wt:
                 continue
@@ -1229,22 +1406,22 @@ def save_plots(df, extra):
             r = df[df.model == m]
             if not r.empty:
                 ms.append(r[metric].mean()); ss.append(r[metric].std() if len(r) > 1 else 0.0); lb.append(short(m))
-        if not ms:
+        if not ms or np.all(np.isnan(ms)):
             continue
         fig, ax = plt.subplots(figsize=(18, 6.5))
         x = np.arange(len(ms))
-        ax.bar(x, ms, yerr=ss, color=pal[:len(ms)], edgecolor="k", capsize=3)
+        ax.bar(x, ms, yerr=np.nan_to_num(ss), color=pal[:len(ms)], edgecolor="k", capsize=3)
         ax.set_xticks(x); ax.set_xticklabels(lb, rotation=55, ha="right", fontsize=8)
-        ax.set_title(f"{METRIC_LABELS[metric]} (mean±std, n={len(SEEDS)} seeds)")
+        ax.set_title(f"{METRIC_LABELS[metric]} (mean +/- std, n={len(SEEDS)} seeds)")
         ax.grid(axis="y", alpha=0.3); plt.tight_layout()
         plt.savefig(SAVE_DIR / f"barplot_{metric}.png", dpi=150, bbox_inches="tight"); plt.close()
 
     if "robust_all" in extra:
         R = extra["robust_all"]
         for b in BACKBONE_NAMES:
-            fig, axes = plt.subplots(1, 4, figsize=(22, 5))
-            for ax, kind in zip(axes, ["bias_in", "bias_out", "gamma", "noise"]):
-                for k in ("BASE", "AUG", "HOMO", "MIQ"):
+            fig, axes = plt.subplots(1, len(ROBUST_KINDS), figsize=(5.2 * len(ROBUST_KINDS), 5))
+            for ax, kind in zip(axes, ROBUST_KINDS):
+                for k in KINDS:
                     sub = R[(R.model == f"{k}_{b}") & (R.kind.isin([kind, "clean"]))]
                     if sub.empty:
                         continue
@@ -1272,9 +1449,9 @@ def save_plots(df, extra):
         if rows:
             piv = pd.DataFrame(rows).pivot(index="ablation", columns="metric", values="delta")
             piv.to_csv(SAVE_DIR / f"ablation_delta_{b}.csv")
-            fig, ax = plt.subplots(figsize=(14, 6))
+            fig, ax = plt.subplots(figsize=(15, 6))
             piv.plot(kind="bar", ax=ax, edgecolor="k", width=0.85)
-            ax.axhline(0, color="k", ls="--"); ax.set_title(f"Ablation ? (ablation - full MIQ) - {b}")
+            ax.axhline(0, color="k", ls="--"); ax.set_title(f"Delta (ablation - full MIQ) - {b}")
             ax.grid(axis="y", alpha=0.3); plt.xticks(rotation=20, ha="right"); plt.tight_layout()
             plt.savefig(SAVE_DIR / f"ablation_delta_{b}.png", dpi=150, bbox_inches="tight"); plt.close()
     print("  [ok] plots saved")
@@ -1323,7 +1500,6 @@ def smoke_test():
     z1, m1 = q.log_and_mask(x1)
     bt = bias_field(1, n, 12, torch.device("cpu")).flatten(1) * 0.3
     zt = (gam * z1 + bt) * m1
-    zt_img = torch.exp(zt.view(1, 1, n, n)) * mask
     u = q.project(z1, m1); v = q.project(bt, m1)
     ph_a = u / torch.sqrt((u ** 2).sum() / m1.sum())
     up = q.project(zt, m1); ph_b = up / torch.sqrt((up ** 2).sum() / m1.sum())
@@ -1332,17 +1508,20 @@ def smoke_test():
     print(f"  [T3] leakage d={d:.3f} <= bound={bound:.3f}")
     assert d <= bound + 1e-6, "Theorem-3 bound violated"
 
-    # ---- nuisance + rician shapes
+    # ---- nuisance / ECE / split utilities
     xb = torch.rand(2, 3, 64, 64)
     for k, lv in ROBUST_CONDS[::3]:
         assert perturb(xb, k, lv, None).shape == xb.shape
+    assert perturb(xb, "radial", 1.0, None).shape == xb.shape
     assert synth_random(xb).shape == xb.shape
+    pr = np.eye(4)[np.random.randint(0, 4, 200)]
+    assert abs(ece_score(np.argmax(pr, 1), pr)) < 1e-9, "ECE of perfect predictor must be 0"
 
     # ---- architectures
     names = []
     for bn in BACKBONE_REGISTRY:
-        names += [f"BASE_{bn}", f"AUG_{bn}", f"HOMO_{bn}", f"MIQ_{bn}"]
-    names += [f"MIQ_{BACKBONE_NAMES[0]}_{s}" for s in ABLATIONS]
+        names += [f"{k}_{bn}" for k in KINDS]
+    names += [f"MIQ_{list(BACKBONE_REGISTRY)[0]}_{s}" for s in ABLATIONS]
     for nm in names:
         m = create_model(nm, 4)
         npar = sum(p.numel() for p in m.parameters()) / 1e6
@@ -1355,16 +1534,15 @@ def smoke_test():
         assert o1.shape == (4, 4) and torch.isfinite(o1).all() and cam.shape == (IMG_SIZE, IMG_SIZE)
         note = ""
         if nm.startswith("MIQ_") and nm.count("_") == 1:
-            # model-level invariance to an in-span nuisance (bias in span of U, gamma)
             with torch.no_grad():
-                xs = torch.zeros(2, 3, IMG_SIZE, IMG_SIZE)
                 yy2, xx2 = torch.meshgrid(torch.arange(IMG_SIZE).float(), torch.arange(IMG_SIZE).float(), indexing="ij")
                 mk = ((((yy2 - 112) / 90) ** 2 + ((xx2 - 112) / 80) ** 2) < 1).float()
                 base = (0.4 + 0.5 * torch.rand(2, 1, IMG_SIZE, IMG_SIZE)) * mk
                 cc = torch.randn(2, K_MODES) * 0.2
                 bb_ = torch.einsum("bk,kp->bp", cc, m.front.U).view(2, 1, IMG_SIZE, IMG_SIZE)
                 xa = base.expand(2, 3, IMG_SIZE, IMG_SIZE).contiguous()
-                xb2 = base ** 1.3 * torch.exp(bb_); xb2 = (xb2 / xb2.amax((1, 2, 3), keepdim=True)).expand(2, 3, IMG_SIZE, IMG_SIZE).contiguous()
+                xb2 = base ** 1.3 * torch.exp(bb_)
+                xb2 = (xb2 / xb2.amax((1, 2, 3), keepdim=True)).expand(2, 3, IMG_SIZE, IMG_SIZE).contiguous()
                 gap = float((m(xa)[0] - m(xb2)[0]).abs().max())
             note = f"  logit gap under in-span nuisance={gap:.2e}"
         print(f"  {nm:34s} params={npar:6.2f}M out={tuple(o1.shape)}{note}")
@@ -1376,7 +1554,7 @@ def check_backbones():
         try:
             m = timm.create_model(v, pretrained=False, features_only=True)
             x = torch.randn(1, 3, IMG_SIZE, IMG_SIZE)
-            print(f"  OK  {k:16s} {v:36s} channels={m.feature_info.channels()} "
+            print(f"  OK  {k:14s} {v:36s} channels={m.feature_info.channels()} "
                   f"last_map={tuple(m(x)[-1].shape[2:])} params={sum(p.numel() for p in m.parameters()) / 1e6:.2f}M")
         except Exception as e:
             print(f"  FAIL {k}: {e}")
@@ -1394,17 +1572,22 @@ if __name__ == "__main__":
         audit_leakage(); sys.exit(0)
 
     print("\n" + "=" * 72)
-    print("  MIQ-Net: Maximal-Invariant Quotient Network")
+    print("  MIQ-Net v2: Maximal-Invariant Quotient Network")
     print(f"  Proposed : {PROPOSED}   Backbones: {BACKBONE_NAMES}")
-    print(f"  Seeds    : {SEEDS}   Device: {DEVICE}   Epochs: {EPOCHS}")
+    print(f"  Seeds    : {SEEDS}   Device: {DEVICE}   Epochs: {EPOCHS}   AMP: {AMP_DTYPE}")
     print(f"  Models   : {len(MODELS)}  Ablations on: {ABL_BACKBONES}")
     print("=" * 72)
+    save_run_config()
 
     if RUN_AUDIT and not (SAVE_DIR / "dup_test_idx.npy").exists():
         try:
             audit_leakage()
         except Exception as e:
             print(f"  ! audit skipped: {e}")
+    try:
+        train_groups()
+    except Exception as e:
+        print(f"  ! train grouping skipped: {e}")
 
     all_results = []
     for model_name in MODELS:
@@ -1418,15 +1601,16 @@ if __name__ == "__main__":
 
     df = (pd.read_csv(SAVE_DIR / "all_results.csv")
             .drop_duplicates(subset=["model", "seed"]).reset_index(drop=True))
-    cols = [c for c in ALL_COLS + ["acc_dedup", "acc_ext"] if c in df.columns]
+    cols = [c for c in ALL_COLS + ["params_M", "ms_per_img"] if c in df.columns]
     summary = df.groupby("model")[cols].agg(["mean", "std"]).round(4)
     summary.to_csv(SAVE_DIR / "summary_mean_std.csv")
-    print("\n=== Mean ± Std ===")
+    print("\n=== Mean +/- Std ===")
     print(summary)
 
     mc_df = run_mcnemar_all_seeds()
     wt_df = run_paired_stats(df)
     build_superiority_table(df, mc_df, wt_df)
+    run_pooled_tests(df)
     extra = collect_robust_and_diag()
     save_plots(df, extra)
     print(f"\n{'=' * 72}\n  All outputs saved to: {SAVE_DIR.resolve()}\n{'=' * 72}")
