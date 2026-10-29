@@ -98,20 +98,7 @@ Five model kinds per backbone `b`:
 | `CONS_b` | raw | ERM + orbit-consistency loss | **recipe control**: same loss as MIQ, no quotient |
 | `MIQ_b` | quotient (`K = 12`, KL basis) | orbit-consistency + spectral-norm head | **proposed** |
 
-Ablations of `MIQ_b` (first backbone only unless `MIQ_ABL_ALL=1`):
-
-| Name | Change |
-|------|--------|
-| `no_inq` | raw front-end (quotient removed, recipe kept) |
-| `no_gamma` | no RMS scale normalisation |
-| `no_mask` | no brain mask |
-| `dct_basis` | cosine basis instead of KL |
-| `rand_basis` | random basis (control) |
-| `k1`, `k6`, `k24` | `K = 1` (log + mask + centre + scale only), 6, 24 |
-| `no_cons` | no consistency loss |
-| `no_lip` | no spectral-norm head |
-
-Default run: `15 main models + 10 ablations = 25 models`, 5 seeds -> **125 training runs**.
+.
 
 ---
 
