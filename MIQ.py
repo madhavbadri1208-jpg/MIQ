@@ -25,14 +25,14 @@ this group, so the classifier can be forced to factor through the quotient X/G.
  T3 (leakage bound)  ||Phi(z')-Phi(z)|| <= 2||P_perp b_tail|| / (gamma ||P_perp z||)
      (standard inequality ||a/|a| - b/|b||| <= 2||a-b||/||a||). Measured, not assumed.
 
-POSITIONING (what is NOT new):  log-domain bias removal (homomorphic filtering,
+POSITIONING:  log-domain bias removal (homomorphic filtering,
 N4), gain/contrast normalisation, spectral-norm Lipschitz heads and consistency
 regularisation are all known.  The study's contribution is the COMBINATION with a
 provable maximal-invariant quotient, the leakage diagnostics, and a protocol with
 controls that separate "quotient" from "augmentation", "consistency loss" and
 "classical homomorphic filtering".
 
-LIMITS (stated honestly): additive/Rician noise and out-of-span bias are not
+LIMITS : additive/Rician noise and out-of-span bias are not
 removed exactly; the sweeps expose this.  Public brain-MRI test accuracy is near
 ceiling, so the headline evidence is robustness / shift / calibration / cost, with
 significance tests, NOT the last 0.2% of clean accuracy.  No component ablation is
