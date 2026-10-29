@@ -212,7 +212,6 @@ All set through environment variables.
 | `MIQ_SEEDS` | `42,123,456,789,2024` | comma-separated seeds |
 | `MIQ_BACKBONES` | all three | comma-separated subset of registry keys |
 | `MIQ_PRETRAINED` | `1` | `0` = random initialisation |
-| `MIQ_ABL_ALL` | `0` | `1` = ablations on every backbone (45 models) |
 | `MIQ_AUDIT` | `1` | `0` = skip the near-duplicate audit |
 | `GPU_ID` | `5` | CUDA index; falls back to `cuda:0`, then CPU. **Override.** |
 
